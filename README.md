@@ -30,11 +30,35 @@ flowchart LR
     end
 ```
 
-## 검증한 것
+## 검증한 것 (실제로 로컬 minikube에 띄워서 확인)
 
-1. **롤링 업데이트**: `maxUnavailable: 0` 설정으로 배포 중에도 서빙 가능한 파드 수가 줄지 않는지 확인
-2. **헬스체크**: readiness probe가 실패한 파드를 서비스 엔드포인트에서 제외하는지 확인
-3. **HPA**: 부하를 걸어 CPU 사용률 기준으로 실제 스케일 아웃이 일어나는지 확인
+### 1. 배포 + 서비스 디스커버리
+`kubectl apply` 후 파드 2개가 `Running`, 서비스 경유 `/health`·`/v1/completions`·`/metrics` 전부 정상 응답 확인.
+
+### 2. 롤링 업데이트 — 무중단 확인
+`kubectl set env`로 새 리비전을 트리거하고 `kubectl get pods`를 관찰:
+```
+새 파드 2개 기동 → 기존 파드 1개 Terminating (2 → 3 → 2, maxUnavailable=0 그대로 지켜짐)
+deployment "vllm-standin" successfully rolled out
+```
+
+### 3. HPA — CPU 기준 지표의 한계를 실측으로 재현
+`hpa.yaml` 주석에 "CPU 기준 HPA는 GPU 서빙에 안 맞을 수 있다"고 적어뒀던 걸, 실제로 부하를 걸어 직접 확인했습니다.
+동시 요청 200개를 쏴서 서버를 동시성 한도(4)까지 채우고 큐를 쌓아본 결과:
+
+| 지표 | 값 |
+|---|---|
+| `kubectl top pods` CPU | 파드당 3m (거의 유휴) |
+| `kubectl get hpa` | `cpu: 3%/50%` — 타겟의 1/16 수준 |
+| `standin_num_requests_running` | 4 (동시성 한도 포화) |
+| `standin_num_requests_waiting` | **18** (요청이 밀려서 대기 중) |
+
+**핵심**: 대기열에 18개나 밀려 있는데도(명백히 스케일 아웃이 필요한 상황) CPU는 3%라 HPA가 `50%` 타겟을 절대 못 넘겨서 스케일 아웃이 일어나지 않습니다 — I/O-bound(이 stand-in) 또는 GPU-bound(실제 vLLM) 워크로드에서 CPU 기준 HPA가 왜 무의미한지를 숫자로 직접 재현한 것입니다. 실제 배포에서는 `standin_num_requests_waiting`과 같은 형태인 vLLM의 `vllm:num_requests_waiting`을 Prometheus Adapter로 노출해서 그 지표로 스케일해야 함 (`k8s/hpa.yaml` 주석 참고).
+
+### 4. 디버깅 중 실제로 부딪힌 문제
+처음엔 `docker build`가 기본으로 만드는 attestation/provenance 매니페스트가 원인인 줄 알았습니다(`exec format error`로 크래시루프). `--provenance=false`로 재빌드했는데도 똑같이 재현돼서 그 가설은 틀렸다는 걸 확인했고, `minikube ssh -- crictl images`로 실제 노드 안의 이미지 ID를 직접 까보니 재빌드 전의 옛날 이미지 ID 그대로였습니다.
+
+`minikube image load`는 `--overwrite=true`가 기본값이라 당연히 새 이미지로 덮어써질 거라 생각했는데, **이미 실행 중인 파드가 그 이미지를 참조하고 있으면 containerd 레벨에서 덮어쓰기가 조용히(에러 없이) 무시**된다는 걸 직접 겪고 알았습니다. `kubectl scale --replicas=0`으로 이미지를 물고 있는 컨테이너부터 없앤 뒤 `minikube image rm` → 재로드하니 새 이미지 ID로 정상 교체됐습니다.
 
 ## CI 성능 회귀 자동 검출
 
@@ -58,13 +82,14 @@ CPU 전용으로 측정해서, `main.py`를 건드리는 PR이 이 오버헤드�
 ## 재현 방법
 ```bash
 minikube start --driver=docker
-cd app && docker build -t vllm-standin:local . && cd ..
-minikube image load vllm-standin:local
+cd app && docker build --provenance=false -t vllm-standin:local . && cd ..
+minikube image load vllm-standin:local                # 같은 태그를 재빌드했다면 아래 4번 참고 (실행 중인 파드가 있으면 이 재로드가 조용히 무시됨)
+minikube addons enable metrics-server                # HPA CPU 지표용
 kubectl apply -f k8s/deployment-local.yaml -f k8s/service.yaml -f k8s/hpa.yaml
 kubectl rollout status deployment/vllm-standin
 ```
 
 ## 한계 (정직하게 명시)
 - GPU 없이 stand-in으로 검증했으므로 실제 vLLM의 콜드스타트 시간(모델 로딩), 메모리 사용 패턴, 실제 추론 지연은 반영되지 않음
-- HPA는 CPU 기준 — 실제 GPU 서빙에서는 `vllm:num_requests_waiting` 같은 커스텀 지표(Prometheus Adapter 필요)가 훨씬 의미 있음, `k8s/hpa.yaml` 주석에 명시
+- HPA는 CPU 기준으로 구성했고, 위 3번 실험에서 이게 실제로 무의미하다는 것까지 확인함 — 실제 GPU 서빙에서는 `vllm:num_requests_waiting` 같은 커스텀 지표(Prometheus Adapter 필요)로 바꿔야 함, `k8s/hpa.yaml` 주석에 명시
 - 단일 노드 로컬 클러스터라 멀티 노드 스케줄링/장애 격리는 검증하지 않음
