@@ -1,0 +1,76 @@
+# 실제 GPU 프로덕션 배포용 참고 매니페스트 — 이 저장소의 로컬 검증에는
+# 사용되지 않았습니다 (이 환경엔 GPU가 없음). deployment-local.yaml과의
+# 핵심 차이만 정리:
+#   1) resources.limits에 nvidia.com/gpu 요청 (NVIDIA device plugin 전제)
+#   2) nodeSelector/toleration으로 GPU 노드 풀에만 스케줄
+#   3) 모델 가중치를 매번 컨테이너 시작 시 다운로드하지 않도록
+#      PVC(ReadWriteMany 또는 노드별 캐시)를 볼륨으로 마운트
+#   4) readiness probe 경로는 vLLM이 실제로 노출하는 /health 그대로 동일
+#   5) HPA는 CPU가 아니라 vllm:num_requests_waiting 커스텀 지표 사용
+#      (hpa.yaml 주석 참고)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+  labels:
+    app: vllm-server
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: vllm-server
+  template:
+    metadata:
+      labels:
+        app: vllm-server
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-accelerator: nvidia-tesla-t4  # 클러스터/클라우드에 맞게 교체
+      tolerations:
+        - key: "nvidia.com/gpu"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: vllm-server
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model=meta-llama/Llama-3.1-8B-Instruct"
+            - "--gpu-memory-utilization=0.90"
+            - "--max-model-len=8192"
+            - "--enable-prefix-caching"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              cpu: "4"
+              memory: "16Gi"
+            limits:
+              cpu: "4"
+              memory: "16Gi"
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: model-cache
+              mountPath: /root/.cache/huggingface
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60      # 모델 로딩 시간 고려 (GPU 콜드스타트)
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: vllm-model-cache

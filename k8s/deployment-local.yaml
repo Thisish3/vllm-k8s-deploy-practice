@@ -1,0 +1,56 @@
+# 로컬(minikube) 검증용 배포 — GPU가 없는 이 환경에서 실제로 띄워서
+# 검증한 매니페스트. 이미지는 app/ 의 stand-in 서버를 사용합니다.
+# 실제 GPU 프로덕션 배포는 deployment-gpu.yaml을 참고하세요.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-standin
+  labels:
+    app: vllm-standin
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # 배포 중에도 서빙 가능한 파드 수가 줄지 않도록
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: vllm-standin
+  template:
+    metadata:
+      labels:
+        app: vllm-standin
+    spec:
+      containers:
+        - name: vllm-standin
+          image: vllm-standin:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: STANDIN_TOKENS_PER_SEC
+              value: "40"
+            - name: STANDIN_MAX_CONCURRENCY
+              value: "4"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3

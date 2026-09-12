@@ -1,0 +1,33 @@
+# 로컬 검증용 HPA — metrics-server(CPU)만으로 스케일 아웃 동작을 확인합니다.
+# 실제 GPU 서빙에서는 CPU 사용률이 아니라 vLLM이 노출하는
+# vllm:num_requests_waiting(대기 큐 길이) 같은 커스텀 지표로 스케일해야
+# 의미가 있습니다 (GPU가 포화돼도 CPU는 안 오를 수 있음) — 이건
+# Prometheus Adapter 등 커스텀/외부 메트릭 어댑터가 필요해서 이 로컬
+# 데모에는 CPU 기준을 그대로 남겨두고 한계로 명시합니다.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vllm-standin
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-standin
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 30
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 15
