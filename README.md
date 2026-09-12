@@ -79,6 +79,8 @@ CPU 전용으로 측정해서, `main.py`를 건드리는 PR이 이 오버헤드�
 주입된 회귀: p50=325.8ms  p95=327.9ms  → 성능 회귀 감지, exit 1
 ```
 
+**실제 CI에 올려보고서야 발견한 문제**: baseline을 로컬 Mac에서 만들어서 커밋했더니, 실제 GitHub Actions(`ubuntu-latest`) 첫 실행이 **진짜로 실패**했습니다 — `p50_ms: 2.38ms > baseline 1.082ms + 25% 허용치`. 코드는 전혀 안 바뀌었는데 회귀로 잡힌 것: 로컬 Mac과 GitHub-hosted 러너의 CPU 성능/가상화 오버헤드가 달라서 baseline 자체가 애초에 안 맞았던 것입니다. **baseline은 반드시 그 baseline과 비교할 환경(여기선 CI 러너) 안에서 만들어야 한다**는, 벤치마크 자동화에서 흔히 놓치는 함정을 직접 겪었습니다 — CI에서 실측된 `p50=2.38ms/p95=2.739ms`로 baseline을 다시 잡아서 고쳤습니다.
+
 ## 재현 방법
 ```bash
 minikube start --driver=docker
