@@ -91,6 +91,38 @@ kubectl apply -f k8s/deployment-local.yaml -f k8s/service.yaml -f k8s/hpa.yaml
 kubectl rollout status deployment/vllm-standin
 ```
 
+## 다음 단계: 실제 GPU(RTX 3080, Windows)로 진짜 vLLM 띄우기 — 진행 예정
+
+> 아래 스크립트/매니페스트는 준비만 된 상태이며 **아직 실제 3080에서 검증하지 않았습니다.**
+> 검증 결과가 나오면 이 섹션을 실측값으로 교체합니다.
+
+stand-in을 실제 vLLM 컨테이너로 바꾸는 단계입니다. GPU 서버는 Windows PC, 벤치마크 클라이언트는 같은 LAN의 Mac.
+
+| 파일 | 역할 |
+|---|---|
+| [`windows/check-env.ps1`](windows/check-env.ps1) | NVIDIA 드라이버 → WSL2 → Docker → 컨테이너 내 GPU 인식까지 한 번에 점검 |
+| [`windows/run-vllm.ps1`](windows/run-vllm.ps1) | 3080(10GB)에 맞춘 설정으로 `vllm/vllm-openai` 실행, `/health` 대기, LAN 주소 출력 |
+| [`app/bench_remote.py`](app/bench_remote.py) | Mac에서 HTTP로 동시성 단계별 부하 → TTFT/지연 p50·p95, tok/s (표준 라이브러리만 사용) |
+| [`k8s/deployment-3080.yaml`](k8s/deployment-3080.yaml) | 단일 GPU 노드용 Deployment+Service (Recreate 전략, startupProbe, hostPath 모델 캐시) |
+
+```powershell
+# Windows PC
+git clone https://github.com/Thisish3/vllm-k8s-deploy-practice.git
+cd vllm-k8s-deploy-practice
+powershell -ExecutionPolicy Bypass -File .\windows\check-env.ps1
+powershell -ExecutionPolicy Bypass -File .\windows\run-vllm.ps1
+# (관리자 PowerShell, Mac에서 접속할 때만) .\windows\run-vllm.ps1 -OpenFirewall
+```
+
+```bash
+# Mac
+python3 app/bench_remote.py --base-url http://<윈도우IP>:8000 --out benchmarks/3080.json
+```
+
+**GPU 한 장일 때 롤링 업데이트가 막히는 이유** — stand-in에서는 `maxSurge: 1, maxUnavailable: 0`으로 무중단 교체를 확인했지만,
+GPU가 한 장이면 새 파드가 `nvidia.com/gpu`를 못 받아 `Pending`에 머물고, `maxUnavailable: 0`이라 기존 파드도 안 내려가서 교착됩니다.
+그래서 `deployment-3080.yaml`은 다운타임을 감수하는 `Recreate` 전략을 씁니다 (무중단이 필요하면 GPU가 N+1장 있어야 함).
+
 ## 한계 (정직하게 명시)
 - GPU 없이 stand-in으로 검증했으므로 실제 vLLM의 콜드스타트 시간(모델 로딩), 메모리 사용 패턴, 실제 추론 지연은 반영되지 않음
 - HPA는 CPU 기준으로 구성했고, 위 3번 실험에서 이게 실제로 무의미하다는 것까지 확인함 — 실제 GPU 서빙에서는 `vllm:num_requests_waiting` 같은 커스텀 지표(Prometheus Adapter 필요)로 바꿔야 함, `k8s/hpa.yaml` 주석에 명시
