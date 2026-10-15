@@ -1,0 +1,204 @@
+{
+  "throughput": {
+    "1": {
+      "k8s": {
+        "median": 123.1,
+        "min": 119.8,
+        "max": 123.4,
+        "n": 5
+      },
+      "baseline": {
+        "median": 123.0,
+        "min": 122.0,
+        "max": 123.5,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 0.1
+    },
+    "4": {
+      "k8s": {
+        "median": 490.1,
+        "min": 486.6,
+        "max": 491.3,
+        "n": 5
+      },
+      "baseline": {
+        "median": 492.0,
+        "min": 482.1,
+        "max": 492.9,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": -0.4
+    },
+    "16": {
+      "k8s": {
+        "median": 1782.5,
+        "min": 1769.3,
+        "max": 1785.2,
+        "n": 5
+      },
+      "baseline": {
+        "median": 1785.7,
+        "min": 1772.5,
+        "max": 1792.6,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": -0.2
+    },
+    "32": {
+      "k8s": {
+        "median": 2821.5,
+        "min": 2800.4,
+        "max": 2848.1,
+        "n": 5
+      },
+      "baseline": {
+        "median": 2831.3,
+        "min": 2795.4,
+        "max": 2838.0,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": -0.3
+    }
+  },
+  "ttft_p50_ms": {
+    "1": {
+      "k8s": {
+        "median": 14.7,
+        "min": 14.7,
+        "max": 14.9,
+        "n": 5
+      },
+      "baseline": {
+        "median": 14.7,
+        "min": 14.6,
+        "max": 14.9,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 0.0
+    },
+    "4": {
+      "k8s": {
+        "median": 19.7,
+        "min": 19.4,
+        "max": 20.1,
+        "n": 5
+      },
+      "baseline": {
+        "median": 19.1,
+        "min": 18.8,
+        "max": 19.6,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 3.1
+    },
+    "16": {
+      "k8s": {
+        "median": 34.9,
+        "min": 34.1,
+        "max": 41.2,
+        "n": 5
+      },
+      "baseline": {
+        "median": 36.4,
+        "min": 33.1,
+        "max": 44.0,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": -4.1
+    },
+    "32": {
+      "k8s": {
+        "median": 62.9,
+        "min": 56.1,
+        "max": 69.6,
+        "n": 5
+      },
+      "baseline": {
+        "median": 59.7,
+        "min": 57.7,
+        "max": 69.2,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 5.4
+    }
+  },
+  "latency_p50_ms": {
+    "1": {
+      "k8s": {
+        "median": 1035.2,
+        "min": 1033.3,
+        "max": 1052.3,
+        "n": 5
+      },
+      "baseline": {
+        "median": 1035.1,
+        "min": 1031.8,
+        "max": 1044.1,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 0.0
+    },
+    "4": {
+      "k8s": {
+        "median": 1043.1,
+        "min": 1041.3,
+        "max": 1053.5,
+        "n": 5
+      },
+      "baseline": {
+        "median": 1039.4,
+        "min": 1036.5,
+        "max": 1055.5,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 0.4
+    },
+    "16": {
+      "k8s": {
+        "median": 1147.3,
+        "min": 1141.8,
+        "max": 1153.2,
+        "n": 5
+      },
+      "baseline": {
+        "median": 1142.3,
+        "min": 1139.5,
+        "max": 1153.0,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 0.4
+    },
+    "32": {
+      "k8s": {
+        "median": 1417.5,
+        "min": 1410.6,
+        "max": 1422.0,
+        "n": 5
+      },
+      "baseline": {
+        "median": 1414.0,
+        "min": 1411.1,
+        "max": 1435.9,
+        "n": 5
+      },
+      "k8s_vs_baseline_pct": 0.2
+    }
+  },
+  "recreate_downtime_s": {
+    "median": 91.4,
+    "min": 91.3,
+    "max": 92.4,
+    "n": 5
+  },
+  "scaleup_ready_s": {
+    "median": 92.0,
+    "min": 91.0,
+    "max": 92.0,
+    "n": 5
+  },
+  "runs": {
+    "k8s": 5,
+    "baseline": 5
+  }
+}

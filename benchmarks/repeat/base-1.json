@@ -1,0 +1,46 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "model": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+  "results": [
+    {
+      "concurrency": 1,
+      "n_requests": 64,
+      "ttft_p50_ms": 14.9,
+      "ttft_p95_ms": 15.7,
+      "latency_p50_ms": 1044.1,
+      "latency_p95_ms": 1056.1,
+      "output_tok_per_s": 122.0,
+      "req_per_s": 0.95
+    },
+    {
+      "concurrency": 4,
+      "n_requests": 64,
+      "ttft_p50_ms": 19.1,
+      "ttft_p95_ms": 28.5,
+      "latency_p50_ms": 1055.5,
+      "latency_p95_ms": 1092.8,
+      "output_tok_per_s": 482.1,
+      "req_per_s": 3.77
+    },
+    {
+      "concurrency": 16,
+      "n_requests": 64,
+      "ttft_p50_ms": 44.0,
+      "ttft_p95_ms": 47.5,
+      "latency_p50_ms": 1153.0,
+      "latency_p95_ms": 1160.8,
+      "output_tok_per_s": 1772.5,
+      "req_per_s": 13.85
+    },
+    {
+      "concurrency": 32,
+      "n_requests": 64,
+      "ttft_p50_ms": 59.7,
+      "ttft_p95_ms": 107.1,
+      "latency_p50_ms": 1419.3,
+      "latency_p95_ms": 1481.8,
+      "output_tok_per_s": 2813.2,
+      "req_per_s": 21.98
+    }
+  ]
+}
