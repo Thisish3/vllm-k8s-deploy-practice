@@ -9,7 +9,8 @@ param(
     [int]$MaxModelLen = 2048,
     # 3080은 윈도우 화면 출력도 같은 VRAM을 쓰므로 여유를 남긴다.
     [double]$GpuMemUtil = 0.80,
-    [string]$Image = "vllm/vllm-openai:latest",
+    # latest는 받는 시점마다 버전이 달라져 실측값과 어긋날 수 있어 고정 (README 실측 버전)
+    [string]$Image = "vllm/vllm-openai:v0.11.2",
     [switch]$Stop,
     [switch]$OpenFirewall
 )

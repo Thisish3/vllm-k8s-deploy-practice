@@ -157,14 +157,42 @@ python3 app/bench_remote.py --base-url http://<윈도우IP>:8000 --out benchmark
 GPU가 한 장이면 새 파드가 `nvidia.com/gpu`를 못 받아 `Pending`에 머물고, `maxUnavailable: 0`이라 기존 파드도 안 내려가서 교착됩니다.
 그래서 `deployment-3080.yaml`은 다운타임을 감수하는 `Recreate` 전략을 씁니다 (무중단이 필요하면 GPU가 N+1장 있어야 함).
 
+### GPU 노드의 K8s에서 실측 — k3s on WSL2
+
+같은 PC의 WSL2(Ubuntu 22.04) 안에 k3s v1.36.5를 설치했습니다. containerd 기본 런타임은 `nvidia`(`--default-runtime=nvidia`)로 두고,
+NVIDIA device plugin v0.17.0을 올리자 노드가 `nvidia.com/gpu: 1`을 광고했습니다. 그 위에 `deployment-3080.yaml`을 적용했습니다.
+
+**처음 적용에서 막힌 두 가지** (둘 다 매니페스트에 반영)
+- **메모리 요청 8Gi가 스케줄 불가**: 처음 값 그대로면 `FailedScheduling: 1 Insufficient memory`로 Pending이었습니다.
+  RAM 16GB PC에서 WSL2 기본 메모리는 호스트의 절반이라 노드 allocatable이 7.70Gi입니다.
+  실측 사용량은 cgroup 최대 4.97GiB, 작업 세트 3.46GiB였고, 요청을 **5Gi**로 낮췄습니다.
+- **`latest` 태그와 이미지 크기**: Docker 쪽 `latest`는 예전에 받아 둔 이미지(vLLM 0.11.2)였습니다. 새 노드가 `latest`를 받으면 다른 버전이 올 수 있어 `v0.11.2`로 고정했습니다.
+  이 이미지는 압축 13.1GB인데, 받고 풀면 노드 디스크를 약 42GB 씁니다. Docker와 k3s(containerd)는 이미지 저장소를 공유하지 않아서 같은 PC에 한 벌씩 따로 들어갑니다.
+  첫 시도는 이 때문에 호스트 디스크가 가득 차 중단됐습니다.
+
+**기동** — 이미지 pull 24분 16초 → 컨테이너 시작 → Ready까지 약 4분. 모델 다운로드가 197.1s였습니다.
+로딩 중 `startupProbe`가 한 번 실패 이벤트(`connection refused`)를 남겼지만, `failureThreshold: 60 × 10s` 범위 안이라 재시작 없이(`restarts=0`) Ready가 됐습니다.
+liveness만 있었다면 로딩 중에 파드가 죽었을 구간입니다.
+
+**클러스터 내부 벤치마크** — `bench_remote.py`를 WSL 안에서 Service ClusterIP로 실행(요청 64개 × 128토큰):
+
+| 동시성 | TTFT p50 | TTFT p95 | 요청 지연 p50 | 출력 tok/s |
+|---|---|---|---|---|
+| 1 | 15.6ms | 16.5ms | 1,139ms | 112.1 |
+| 4 | 20.9ms | 30.5ms | 1,153ms | 442.3 |
+| 16 | 40.1ms | 54.4ms | 1,242ms | 1,644.7 |
+| 32 | 73.4ms | 114.6ms | 1,539ms | 2,612.1 |
+
+Docker 단독(위 표)과 처리량 차이는 2.5% 안쪽입니다. K8s 계층(Service, kube-proxy)이 처리량에 주는 부담은 측정 노이즈 수준이었습니다.
+TTFT가 조금 낮은 건 Windows→WSL 포트 프록시를 거치지 않아서로 보입니다. 각 1회 측정이며, 원본은 [`benchmarks/3060ti-k3s.json`](benchmarks/3060ti-k3s.json)입니다.
+
+**`Recreate` 교체** — `kubectl rollout restart` 중 Service의 `/health`를 1초마다 확인했습니다.
+- 기존 파드가 `Terminating`이 된 뒤에 새 파드가 생겼고, 두 파드가 GPU를 동시에 잡는 순간이 없었습니다. 위에서 예상한 교착은 일어나지 않았습니다.
+- 대신 **서비스 중단이 101.8초**였습니다(`/health` 실패 → 200 복귀). 교체 시작부터 rollout 완료까지는 105초였습니다.
+- `hostPath` 모델 캐시 덕분에 재다운로드는 없었습니다(모델 로딩 27.0s, 첫 기동은 197.1s). 남은 시간은 프로세스 기동, `torch.compile` 18.4s, 엔진 초기화 25.6s, probe 주기였습니다.
+- 즉 GPU 한 장짜리 노드에서 버전 교체 1회는 약 100초의 다운타임입니다. 이걸 없애려면 GPU를 N+1장 두거나, 앞단에서 트래픽을 다른 복제본으로 돌려야 합니다.
+
 ## 한계 (정직하게 명시)
-- K8s 실험(롤링 업데이트, HPA)은 GPU 없이 stand-in으로 검증했습니다. 실제 vLLM의 콜드스타트, 메모리, 추론 지연은 위 섹션에서 Docker 단독으로 실측했습니다.
-  `k8s/deployment-3080.yaml`은 WSL2 안의 k3s(v1.36.5)에서 스케줄링 단계까지만 확인했고, 아래와 같이 막혔습니다.
-  - **GPU 노출은 됨**: containerd 기본 런타임을 `nvidia`로 두고(`--default-runtime=nvidia`) NVIDIA device plugin v0.17.0을 올리자, 노드가 `nvidia.com/gpu: 1`을 광고했습니다.
-  - **스케줄링 실패**: 매니페스트를 그대로 적용하자 `FailedScheduling: 1 Insufficient memory`로 Pending이 됐습니다.
-    RAM 16GB PC에서 WSL2 기본값은 호스트의 절반이라 노드 allocatable이 7.70Gi(8,078,548Ki)인데, 매니페스트는 `requests.memory: 8Gi`를 요구합니다.
-    단일 GPU PC에서 쓰려면 `.wslconfig`의 `memory`를 늘리거나 요청값을 실측 RSS에 맞춰 낮춰야 합니다. 실측 RSS는 아직 재지 못했습니다.
-  - **이미지 크기가 실제 제약**: `vllm/vllm-openai` 이미지가 43.1GB입니다. Docker와 k3s는 이미지 저장소를 공유하지 않아서, k3s에서 다시 받는 도중 호스트 디스크가 가득 차 중단했습니다.
-    그래서 파드 기동, `startupProbe`, `Recreate` 교체는 아직 검증하지 못했습니다. 실제 노드에서는 이미지를 미리 받아 두거나, 노드 디스크 크기를 이미지 크기 기준으로 잡아야 합니다.
+- 롤링 업데이트(`maxSurge`)와 HPA 실험은 GPU 없이 stand-in으로 검증했습니다. GPU 위에서는 단일 노드 `Recreate`, 기동, 처리량만 실측했습니다.
 - HPA는 CPU 기준으로 구성했고, 위 3번 실험에서 이게 실제로 무의미하다는 것까지 확인함 — 실제 GPU 서빙에서는 `vllm:num_requests_waiting` 같은 커스텀 지표(Prometheus Adapter 필요)로 바꿔야 함, `k8s/hpa.yaml` 주석에 명시
 - 단일 노드 로컬 클러스터라 멀티 노드 스케줄링/장애 격리는 검증하지 않음

@@ -30,7 +30,8 @@ spec:
     spec:
       containers:
         - name: vllm
-          image: vllm/vllm-openai:latest
+          # latest는 노드마다 다른 버전을 받을 수 있어 고정. 압축 13.1GB, 노드 디스크 약 42GB 필요
+          image: vllm/vllm-openai:v0.11.2
           args:
             - "--model=TinyLlama/TinyLlama-1.1B-Chat-v1.0"
             - "--max-model-len=2048"
@@ -39,9 +40,11 @@ spec:
           ports:
             - containerPort: 8000
           resources:
+            # 실측(k3s, TinyLlama): cgroup 최대 4.97GiB, 작업 세트 3.46GiB.
+            # 8Gi를 요청하면 RAM 16GB PC의 WSL2 노드(allocatable 7.70Gi)에 스케줄되지 않음
             requests:
               cpu: "2"
-              memory: "8Gi"
+              memory: "5Gi"
             limits:
               memory: "12Gi"
               nvidia.com/gpu: "1"
