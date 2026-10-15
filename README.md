@@ -159,7 +159,12 @@ GPU가 한 장이면 새 파드가 `nvidia.com/gpu`를 못 받아 `Pending`에 �
 
 ## 한계 (정직하게 명시)
 - K8s 실험(롤링 업데이트, HPA)은 GPU 없이 stand-in으로 검증했습니다. 실제 vLLM의 콜드스타트, 메모리, 추론 지연은 위 섹션에서 Docker 단독으로 실측했습니다.
-  다만 `k8s/deployment-3080.yaml`을 GPU 노드에 올려 `startupProbe`, `Recreate` 교체가 실제로 동작하는지는 아직 검증하지 않았습니다.
-  GPU가 있는 Windows PC에 로컬 K8s 클러스터와 NVIDIA device plugin이 없어서입니다.
+  `k8s/deployment-3080.yaml`은 WSL2 안의 k3s(v1.36.5)에서 스케줄링 단계까지만 확인했고, 아래와 같이 막혔습니다.
+  - **GPU 노출은 됨**: containerd 기본 런타임을 `nvidia`로 두고(`--default-runtime=nvidia`) NVIDIA device plugin v0.17.0을 올리자, 노드가 `nvidia.com/gpu: 1`을 광고했습니다.
+  - **스케줄링 실패**: 매니페스트를 그대로 적용하자 `FailedScheduling: 1 Insufficient memory`로 Pending이 됐습니다.
+    RAM 16GB PC에서 WSL2 기본값은 호스트의 절반이라 노드 allocatable이 7.70Gi(8,078,548Ki)인데, 매니페스트는 `requests.memory: 8Gi`를 요구합니다.
+    단일 GPU PC에서 쓰려면 `.wslconfig`의 `memory`를 늘리거나 요청값을 실측 RSS에 맞춰 낮춰야 합니다. 실측 RSS는 아직 재지 못했습니다.
+  - **이미지 크기가 실제 제약**: `vllm/vllm-openai` 이미지가 43.1GB입니다. Docker와 k3s는 이미지 저장소를 공유하지 않아서, k3s에서 다시 받는 도중 호스트 디스크가 가득 차 중단했습니다.
+    그래서 파드 기동, `startupProbe`, `Recreate` 교체는 아직 검증하지 못했습니다. 실제 노드에서는 이미지를 미리 받아 두거나, 노드 디스크 크기를 이미지 크기 기준으로 잡아야 합니다.
 - HPA는 CPU 기준으로 구성했고, 위 3번 실험에서 이게 실제로 무의미하다는 것까지 확인함 — 실제 GPU 서빙에서는 `vllm:num_requests_waiting` 같은 커스텀 지표(Prometheus Adapter 필요)로 바꿔야 함, `k8s/hpa.yaml` 주석에 명시
 - 단일 노드 로컬 클러스터라 멀티 노드 스케줄링/장애 격리는 검증하지 않음
