@@ -91,12 +91,46 @@ kubectl apply -f k8s/deployment-local.yaml -f k8s/service.yaml -f k8s/hpa.yaml
 kubectl rollout status deployment/vllm-standin
 ```
 
-## 다음 단계: 실제 GPU(RTX 3080, Windows)로 진짜 vLLM 띄우기 — 진행 예정
+## 실제 GPU(Windows, Docker)에서 진짜 vLLM 띄우기 — 실측 완료
 
-> 아래 스크립트/매니페스트는 준비만 된 상태이며 **아직 실제 3080에서 검증하지 않았습니다.**
-> 검증 결과가 나오면 이 섹션을 실측값으로 교체합니다.
+stand-in을 실제 vLLM 컨테이너로 바꾼 단계입니다. 스크립트는 RTX 3080(10GB)을 가정하고 썼지만,
+실제 검증은 **RTX 3060 Ti(8GB)** 에서 했습니다. TinyLlama-1.1B는 기본 설정(`--gpu-memory-utilization 0.80`) 그대로 들어갔습니다.
 
-stand-in을 실제 vLLM 컨테이너로 바꾸는 단계입니다. GPU 서버는 Windows PC, 벤치마크 클라이언트는 같은 LAN의 Mac.
+**환경**: RTX 3060 Ti 8GB(드라이버 581.80) · i5-10400 · RAM 16GB · Windows 10 + WSL2 + Docker Desktop 28.0.1 ·
+`vllm/vllm-openai:latest`(실행 시점 vLLM 0.11.2, 이미지 43.1GB) · TinyLlama-1.1B-Chat · `max-model-len 2048` · prefix caching 켬.
+`check-env.ps1` 4개 항목 모두 통과(컨테이너 안에서 `nvidia-smi -L`로 GPU 인식 확인).
+
+### 콜드스타트 — stand-in에서는 볼 수 없던 부분
+
+| 단계 | 첫 실행(가중치 다운로드 포함) | 재시작(`hf-cache` 볼륨에 가중치 있음) |
+|---|---|---|
+| 모델 로딩 | 194.3s | 2.8s |
+| torch.compile | 19.1s | 10.7s |
+| 엔진 초기화(프로파일·KV 캐시·워밍업, CUDA graph 포함) | 26.8s | 17.9s |
+| **컨테이너 시작 → `/health` 200** | **약 267s** | **47.8s** |
+
+- 첫 실행 지연의 대부분은 가중치 다운로드였습니다. `hf-cache` named volume을 쓴 덕분에 재시작에서 194s가 2.8s로 줄었습니다.
+  K8s에서 `hostPath` 모델 캐시와 넉넉한 `startupProbe`를 둔 이유가 이 숫자입니다. 캐시가 없는 새 노드에 파드가 뜨면 4분 이상 준비되지 않습니다.
+- 가중치는 2.05GiB, KV 캐시는 4.01GiB(191,264 토큰, 2048 토큰 요청 기준 동시 93개분)였습니다.
+  CUDA graph는 0.34GiB를 더 썼습니다. 서버가 뜬 뒤 `nvidia-smi` 사용량은 7,824 / 8,192MiB였습니다. vLLM이 `gpu-memory-utilization` 비율만큼 미리 잡아두기 때문입니다.
+
+### 동시성별 처리량 — `bench_remote.py`, 요청 64개 × 출력 128토큰(`ignore_eos`)
+
+| 동시성 | TTFT p50 | TTFT p95 | 요청 지연 p50 | 출력 tok/s | req/s |
+|---|---|---|---|---|---|
+| 1 | 17.8ms | 38.2ms | 1,154ms | 110.7 | 0.86 |
+| 4 | 27.5ms | 46.4ms | 1,162ms | 441.7 | 3.45 |
+| 16 | 46.2ms | 64.3ms | 1,254ms | 1,627.2 | 12.71 |
+| 32 | 94.0ms | 143.4ms | 1,578ms | 2,549.8 | 19.92 |
+
+- 동시성 1→32에서 처리량은 23배 늘었습니다. 요청 하나의 지연은 1.37배(1,154→1,578ms)만 늘었습니다.
+  1.1B 모델의 디코드는 메모리 대역폭에 묶여 있어서, 연속 배칭으로 같은 가중치 읽기를 여러 요청이 나눠 쓰기 때문입니다.
+- 16→32 구간부터 TTFT p50이 2배(46→94ms)로 뛰기 시작합니다. 새 요청의 prefill이 진행 중인 디코드 배치와 스텝을 나눠 쓰기 때문입니다.
+  위 HPA 실험에서 말한 "CPU가 아니라 대기열·지연 지표로 스케일해야 한다"는 결론의 GPU 쪽 근거가 이 구간입니다.
+- 원본 결과: [`benchmarks/3060ti.json`](benchmarks/3060ti.json). 서버와 클라이언트를 같은 PC(`localhost`)에서 돌렸으므로 LAN 지연은 포함되지 않았습니다.
+  각 단계는 1회 측정입니다.
+
+### 파일과 실행 방법
 
 | 파일 | 역할 |
 |---|---|
@@ -115,8 +149,8 @@ powershell -ExecutionPolicy Bypass -File .\windows\run-vllm.ps1
 ```
 
 ```bash
-# Mac
-python3 app/bench_remote.py --base-url http://<윈도우IP>:8000 --out benchmarks/3080.json
+# 같은 PC면 http://localhost:8000, Mac 등 다른 기기면 Windows PC의 LAN 주소
+python3 app/bench_remote.py --base-url http://<윈도우IP>:8000 --out benchmarks/3060ti.json
 ```
 
 **GPU 한 장일 때 롤링 업데이트가 막히는 이유** — stand-in에서는 `maxSurge: 1, maxUnavailable: 0`으로 무중단 교체를 확인했지만,
@@ -124,6 +158,8 @@ GPU가 한 장이면 새 파드가 `nvidia.com/gpu`를 못 받아 `Pending`에 �
 그래서 `deployment-3080.yaml`은 다운타임을 감수하는 `Recreate` 전략을 씁니다 (무중단이 필요하면 GPU가 N+1장 있어야 함).
 
 ## 한계 (정직하게 명시)
-- GPU 없이 stand-in으로 검증했으므로 실제 vLLM의 콜드스타트 시간(모델 로딩), 메모리 사용 패턴, 실제 추론 지연은 반영되지 않음
+- K8s 실험(롤링 업데이트, HPA)은 GPU 없이 stand-in으로 검증했습니다. 실제 vLLM의 콜드스타트, 메모리, 추론 지연은 위 섹션에서 Docker 단독으로 실측했습니다.
+  다만 `k8s/deployment-3080.yaml`을 GPU 노드에 올려 `startupProbe`, `Recreate` 교체가 실제로 동작하는지는 아직 검증하지 않았습니다.
+  GPU가 있는 Windows PC에 로컬 K8s 클러스터와 NVIDIA device plugin이 없어서입니다.
 - HPA는 CPU 기준으로 구성했고, 위 3번 실험에서 이게 실제로 무의미하다는 것까지 확인함 — 실제 GPU 서빙에서는 `vllm:num_requests_waiting` 같은 커스텀 지표(Prometheus Adapter 필요)로 바꿔야 함, `k8s/hpa.yaml` 주석에 명시
 - 단일 노드 로컬 클러스터라 멀티 노드 스케줄링/장애 격리는 검증하지 않음
